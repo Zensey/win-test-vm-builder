@@ -1,0 +1,12 @@
+# Packer binary + its local state
+packer.exe
+.packer.d/
+packer_cache/
+
+# Build output: VM disks, exports, logs -- large and host-specific
+output-*/
+packer_build.log
+crash.log
+
+# IDE
+.idea/

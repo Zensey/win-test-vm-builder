@@ -98,11 +98,67 @@
           <Order>1</Order>
           <Path>reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f</Path>
         </RunSynchronousCommand>
-        <!-- Bring up WinRM over HTTP so Packer can connect; a:\enable-winrm.cmd is
-             staged onto the attached floppy by packer/win10/win10-testvm.pkr.hcl. -->
+        <!-- Bring up WinRM over HTTP entirely through its Group Policy
+             registry keys, not "winrm quickconfig"/Set-Item WSMan: (the
+             previous approach here) - both refuse to enable
+             AllowUnencrypted while the network is classified "Public",
+             which is exactly how VirtualBox's NAT adapter comes up. That
+             previous approach reclassified the network to Private in
+             FirstLogonCommands first (via Get-NetConnectionProfile) to work
+             around it, which is timing-sensitive: it depends on NLA having
+             already (not yet) classified the network at the moment that
+             command runs, a race that went from "usually fine" to
+             reliably losing once headless = true made boot/OOBE slower and
+             moved where in that race the command landed - confirmed live,
+             AllowUnencrypted/Basic stayed false for the whole build even
+             though the network showed Private by the time anyone checked.
+             The Group Policy keys below sidestep the problem entirely, the
+             same fix win7/http/Autounattend.xml uses: honored regardless of
+             network category, no reclassification, no race. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
-          <Path>cmd /c a:\enable-winrm.cmd</Path>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service" /v AllowAutoConfig /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service" /v IPv4Filter /t REG_SZ /d "*" /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service" /v AllowUnencryptedTraffic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service\Auth" /v Basic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Client" /v AllowUnencryptedTraffic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Client" /v TrustedHostsList /t REG_SZ /d "*" /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Client\Auth" /v Basic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <Path>netsh advfirewall firewall add rule name=WinRM-HTTP dir=in action=allow protocol=TCP localport=5985 profile=any</Path>
+        </RunSynchronousCommand>
+        <!-- "exit 0" at the end: a fresh install's winrm service is Manual
+             start, so it needs starting here - but RunSynchronousCommand
+             aborts the whole specialize pass on a non-zero exit code, and
+             "net start" on a service that happens to already be running
+             returns one too. The rest of the WinRM setup (creating the
+             actual listener, enabling Basic auth, raising the shell quota)
+             is in FirstLogonCommands below, not here - see its comment for
+             why (confirmed live: these silently no-op from specialize's
+             SYSTEM/Session 0 context, same as win7). -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>10</Order>
+          <Path>cmd /c "sc config winrm start= auto &amp; net start winrm &amp; exit 0"</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -146,43 +202,32 @@
         <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
       <FirstLogonCommands>
-        <!-- The real WinRM setup. enable-winrm.cmd (specialize pass, off the
-             floppy) only ever got "winrm quickconfig" to stick; everything
-             after it kept silently failing, including here at first: the
-             actual cause (confirmed live) is that VirtualBox's NAT adapter
-             comes up classified as a Public network, and WinRM's
-             AllowUnencrypted (needed for Basic auth over plain HTTP) refuses
-             to enable itself on a Public network ("WinRM firewall exception
-             will not work since one of the network connection types on this
-             machine is set to Public..."). Reclassifying it as Private first
-             is the fix. -->
+        <!-- Finishes the WinRM setup that specialize's GPO registry keys
+             (AllowUnencrypted via policy - the one setting actually guarded
+             by network category) couldn't do on their own: creating the
+             actual HTTP listener and raising the WinRM shell quota turned
+             out (confirmed live, same as win7) to silently no-op from
+             specialize's SYSTEM/Session 0 context - the service comes up
+             RUNNING with no listener and the default MaxShellsPerUser=5
+             regardless of these commands being present there and exiting 0.
+             `winrm.cmd` apparently needs a real logged-on user context for
+             these, not specialize's. -->
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell -NoProfile -Command "Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private"</CommandLine>
+          <CommandLine>cmd /c "winrm create winrm/config/Listener?Address=*+Transport=HTTP &amp; exit 0"</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>2</Order>
-          <CommandLine>netsh advfirewall firewall add rule name=WinRM-HTTP dir=in action=allow protocol=TCP localport=5985 profile=any</CommandLine>
+          <CommandLine>cmd /c winrm set winrm/config/service/auth @{Basic="true"}</CommandLine>
         </SynchronousCommand>
+        <!-- Default MaxShellsPerUser is 5. Packer's WinRM waiter opens a new
+             shell on every health-check poll; if several polls land before
+             this listener exists, the failed/abandoned shells count against
+             this quota and it's easy to exhaust it before the connection
+             ever succeeds (same "QuotaLimit" failure mode win7 hit). -->
         <SynchronousCommand wcm:action="add">
           <Order>3</Order>
-          <CommandLine>powershell -NoProfile -Command "Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force"</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>4</Order>
-          <CommandLine>powershell -NoProfile -Command "Set-Item -Path WSMan:\localhost\Service\Auth\Basic -Value $true -Force"</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>5</Order>
-          <CommandLine>powershell -NoProfile -Command "Set-Item -Path WSMan:\localhost\Client\Auth\Basic -Value $true -Force"</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>6</Order>
-          <CommandLine>net stop winrm</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>7</Order>
-          <CommandLine>net start winrm</CommandLine>
+          <CommandLine>cmd /c winrm set winrm/config/winrs @{MaxShellsPerUser="50"}</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>

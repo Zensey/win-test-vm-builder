@@ -96,9 +96,12 @@ source "virtualbox-iso" "w10" {
   winrm_password = var.winrm_password
   winrm_timeout  = "6h"
 
+  # enable-winrm.cmd used to be staged here too, but its job (bringing up
+  # WinRM over HTTP in the specialize pass) is now done entirely through
+  # Autounattend.xml's own RunSynchronousCommand/GPO registry keys -- see
+  # that file's specialize-pass comment for why.
   floppy_files = [
     "${path.root}/http/Autounattend.xml",
-    "${path.root}/scripts/enable-winrm.cmd",
   ]
 
   # A serial port wired to a named pipe, the way tests/vbox_autotest.py's

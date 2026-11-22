@@ -179,7 +179,7 @@ if (-not $loggedIn) {
     throw "guest control login/exec failed after 3 attempts (exit $LASTEXITCODE)$timeoutNote -- check -GuestUsername/-GuestPassword are right for THIS VM (an older VM may still use whatever password it was actually built with, not necessarily what's in Autounattend.xml/win10-testvm.pkr.hcl's current default), and check for account lockout (lusrmgr.msc on the guest) before retrying by hand rather than re-running this script in a loop"
 }
 
-Write-Host "== zeroing free space on C: inside the guest (same as shrink.ps1) =="  -ForegroundColor Cyan
+Write-Host "== zeroing free space on C: inside the guest (same as shrink.ps1) -- started $(Get-Date -Format 'HH:mm:ss'), can take up to ${ZeroFillTimeoutSec}s on a large disk ==" -ForegroundColor Cyan
 # Not `cipher /w`: its last pass writes random data and leaves free space
 # non-zero, defeating compaction -- see shrink.ps1's comment for the
 # measured before/after this caused.

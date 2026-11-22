@@ -127,7 +127,10 @@ if ($Memory) { $buildArgs += @("-var", "memory=$Memory") }
 if ($DiskSize) { $buildArgs += @("-var", "disk_size=$DiskSize") }
 $buildArgs += $root
 
-Write-Host "== packer build ($VmName) ==" -ForegroundColor Cyan
+Write-Host "== packer build ($VmName) started at $(Get-Date -Format 'HH:mm:ss') ==" -ForegroundColor Cyan
+Write-Host "   (OS install, OOBE and WinRM bring-up can take 10-30+ min before" -ForegroundColor DarkCyan
+Write-Host "   provisioning output starts -- that's normal, not a hang; note the" -ForegroundColor DarkCyan
+Write-Host "   time above if you need to judge how long it's actually been stuck)" -ForegroundColor DarkCyan
 & $packerExe @buildArgs
 if ($LASTEXITCODE -ne 0) {
     throw "packer build failed (exit $LASTEXITCODE); VM/disk left in place for inspection"

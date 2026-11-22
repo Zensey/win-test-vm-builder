@@ -1,9 +1,10 @@
 @echo off
-rem Run from the attached floppy during Windows Setup's specialize pass
-rem (see Autounattend.xml). Brings up a WinRM listener Packer can connect to.
-rem Auth/firewall are re-applied in FirstLogonCommands too: this early in
-rem specialize the firewall service isn't reliably up yet, so a netsh call
-rem here can silently no-op.
+rem UNUSED -- no longer referenced by win10-testvm.pkr.hcl's floppy_files or
+rem Autounattend.xml. Its job (bringing up WinRM over HTTP) is now done
+rem entirely through Autounattend.xml's own RunSynchronousCommand/GPO
+rem registry keys in the specialize pass, which don't depend on network
+rem category the way "winrm quickconfig"/these winrm set calls do -- see
+rem that file's specialize-pass comment. Kept here only for reference.
 
 winrm quickconfig -q
 winrm set winrm/config @{MaxTimeoutms="1800000"}

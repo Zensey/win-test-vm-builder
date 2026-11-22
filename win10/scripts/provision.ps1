@@ -50,13 +50,28 @@ for ($i = 1; $i -le $attempts; $i++) {
 }
 
 if ($setup) {
+    # Trust the ISO's own driver-signing certs first: a clean guest (no
+    # Windows Update history yet to have picked up Oracle's cert via root
+    # CA sync) rejects the Guest Additions drivers with
+    # ERROR_AUTHENTICODE_TRUST_NOT_ESTABLISHED and the installer exits 0
+    # anyway, leaving VBoxService.exe missing -- confirmed live, same
+    # failure and same fix as win7/scripts/install-guest-additions.ps1.
+    $isoRoot = Split-Path -Parent $setup
+    $certUtil = Join-Path $isoRoot "cert\VBoxCertUtil.exe"
+    if (Test-Path $certUtil) {
+        Get-ChildItem (Join-Path $isoRoot "cert") -Filter "vbox-sha*.cer" |
+            Where-Object { $_.Name -notmatch "root|timestamp" } |
+            ForEach-Object { & $certUtil add-trusted-publisher $_.FullName }
+    }
+
     Write-Host "installing Guest Additions from $setup"
     $proc = Start-Process -FilePath $setup -ArgumentList "/S" -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
         Write-Warning "VBoxWindowsAdditions.exe exited with code $($proc.ExitCode)"
     }
-    $installed = Test-Path "${env:ProgramFiles}\Oracle\VirtualBox Guest Additions\VBoxService.exe"
+    $installed = Test-Path "$env:WINDIR\System32\VBoxService.exe"
     if ($installed) {
+        Start-Service VBoxService -ErrorAction SilentlyContinue
         Write-Host "Guest Additions installed (VBoxService.exe present)"
     } else {
         Write-Warning "VBoxService.exe not found after install -- Guest Additions likely did not install correctly"

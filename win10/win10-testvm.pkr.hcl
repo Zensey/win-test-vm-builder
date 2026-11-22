@@ -150,7 +150,14 @@ build {
   # Shrink the footprint: drop bloat, zero freed clusters so the dynamic VDI
   # can actually give that space back, then compact it from the host side.
   provisioner "powershell" {
-    script = "${path.root}/scripts/shrink.ps1"
+    script     = "${path.root}/scripts/shrink.ps1"
+    # Packer's own post-script cleanup step (deleting the temp env-vars
+    # script it generated) fails here with "... is not recognized as the
+    # name of a cmdlet ..." -- a known, documented upstream bug
+    # (hashicorp/packer#11013), not something in shrink.ps1 itself:
+    # shrink.ps1's own output (including the zero-fill) completes fully
+    # before this error appears. Same fix as win7-testvm.pkr.hcl.
+    skip_clean = true
   }
 
   # No compaction post-processor here on purpose: a failure in a post-processor

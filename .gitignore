@@ -6,6 +6,7 @@ packer_cache/
 # Build output: VM disks, exports, logs -- large and host-specific
 output-*/
 packer_build.log
+build-log.txt
 crash.log
 
 # IDE

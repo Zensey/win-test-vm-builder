@@ -2,10 +2,10 @@
 <#
 .SYNOPSIS
   Zero-fills free space inside an already-built VM's guest, then compacts
-  its VDI on the host -- the two steps shrink.ps1 + build.ps1 do during a
+  its VDI on the host -- the two steps shrink.ps1 + build-win10.ps1 do during a
   fresh build, run here by hand against a VM that already exists (e.g. one
   that has idled and accumulated writes, or was never built through
-  build.ps1 at all).
+  build-win10.ps1 at all).
 
 .DESCRIPTION
   1. Starts the VM headless if it isn't running.
@@ -18,7 +18,7 @@
      before/after size.
 
   Needs the VM to already have Guest Additions installed (anything built by
-  build.ps1 does) and a guest account guestcontrol can log into.
+  build-win10.ps1 does) and a guest account guestcontrol can log into.
 
 .PARAMETER VmName
   VM name as registered in VirtualBox.
@@ -49,7 +49,12 @@ param(
     [string]$GuestPassword = "DriverTestTest!1",
     [string]$VdiPath,
     [int]$BootTimeoutSec = 300,
-    [int]$ShutdownTimeoutSec = 180
+    [int]$ShutdownTimeoutSec = 180,
+    # How long a single `guestcontrol run` call is allowed to hang before
+    # it's treated as failed. The zero-fill itself can legitimately take a
+    # while on a large disk, hence the much larger default than the other
+    # guestcontrol calls (login check, shutdown trigger) use.
+    [int]$ZeroFillTimeoutSec = 900
 )
 
 $ErrorActionPreference = "Stop"
@@ -79,10 +84,44 @@ function Invoke-VBoxQuiet {
     # a terminating NativeCommandError -- expected here (e.g. "Guest
     # Additions are not installed or not ready (yet)" while the guest is
     # still booting), so swallow it and let the caller check $LASTEXITCODE.
-    param([string[]]$VBoxArgs)
+    #
+    # Runs in a background job with a timeout, not just `&` directly:
+    # `guestcontrol run` has been observed to hang indefinitely on this
+    # project's Win7 test VM (confirmed live -- the zero-fill step below
+    # sat for 8+ minutes with no file ever created on the guest side, no
+    # error, nothing to Ctrl+C), even though Guest Additions themselves are
+    # genuinely installed and working, and the very same call can succeed
+    # fine moments before or after. Without a timeout, that hang is this
+    # script's hang -- there is no other way to detect or recover from it.
+    param([string[]]$VBoxArgs, [int]$TimeoutSec = 60)
+    # NOT named $Args for the scriptblock parameter: that shadows
+    # PowerShell's own automatic $args variable, which silently broke
+    # `@Args` splatting here the first time this was written -- VBoxManage
+    # received garbage and printed its own usage text instead of running,
+    # which then got misread as an exit code (see the exitCode fix below).
+    $job = Start-Job -ScriptBlock {
+        param($VBoxExe, $CmdArgs)
+        & $VBoxExe @CmdArgs 2>$null | Out-Null
+        $LASTEXITCODE
+    } -ArgumentList $script:vbox, $VBoxArgs
     try {
-        & $script:vbox @VBoxArgs 2>$null
-    } catch {
+        if (-not (Wait-Job $job -Timeout $TimeoutSec)) {
+            $script:LastInvokeTimedOut = $true
+            $global:LASTEXITCODE = -1
+            return
+        }
+        $script:LastInvokeTimedOut = $false
+        # -Last 1, not the whole thing: Receive-Job returns every object the
+        # scriptblock wrote, including whatever the native command printed
+        # to stdout before the trailing $LASTEXITCODE -- without -Last 1,
+        # $exitCode becomes that entire array, which then gets caught up
+        # jamming the actual VBoxManage output into "exit $LASTEXITCODE"
+        # error messages elsewhere in this script instead of a number.
+        $exitCode = Receive-Job $job -ErrorAction SilentlyContinue | Select-Object -Last 1
+        $global:LASTEXITCODE = if ($null -eq $exitCode) { -1 } else { $exitCode }
+    } finally {
+        Stop-Job $job -ErrorAction SilentlyContinue | Out-Null
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -127,7 +166,7 @@ if (-not $ready) {
 Write-Host "== confirming guest control actually logs in (up to 3 attempts, 15s apart) =="  -ForegroundColor Cyan
 $loggedIn = $false
 for ($attempt = 1; $attempt -le 3; $attempt++) {
-    Invoke-VBoxQuiet @(
+    Invoke-VBoxQuiet -TimeoutSec 60 -VBoxArgs @(
         "guestcontrol", $VmName, "run",
         "--username", $GuestUsername, "--password", $GuestPassword,
         "--exe", "C:\Windows\System32\cmd.exe", "--", "cmd.exe", "/c", "exit 0"
@@ -136,7 +175,8 @@ for ($attempt = 1; $attempt -le 3; $attempt++) {
     if ($attempt -lt 3) { Start-Sleep -Seconds 15 }
 }
 if (-not $loggedIn) {
-    throw "guest control login/exec failed after 3 attempts (exit $LASTEXITCODE) -- check -GuestUsername/-GuestPassword are right for THIS VM (an older VM may still use whatever password it was actually built with, not necessarily what's in Autounattend.xml/win10-testvm.pkr.hcl's current default), and check for account lockout (lusrmgr.msc on the guest) before retrying by hand rather than re-running this script in a loop"
+    $timeoutNote = if ($script:LastInvokeTimedOut) { " (the last attempt hung rather than failing outright -- guestcontrol on this VM has been observed to do that intermittently even with correct credentials; just retrying the script often works)" } else { "" }
+    throw "guest control login/exec failed after 3 attempts (exit $LASTEXITCODE)$timeoutNote -- check -GuestUsername/-GuestPassword are right for THIS VM (an older VM may still use whatever password it was actually built with, not necessarily what's in Autounattend.xml/win10-testvm.pkr.hcl's current default), and check for account lockout (lusrmgr.msc on the guest) before retrying by hand rather than re-running this script in a loop"
 }
 
 Write-Host "== zeroing free space on C: inside the guest (same as shrink.ps1) =="  -ForegroundColor Cyan
@@ -162,24 +202,29 @@ try {
 Remove-Item $path -Force
 '@
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($zeroFillCmd))
-Invoke-VBoxQuiet @(
+Invoke-VBoxQuiet -TimeoutSec $ZeroFillTimeoutSec -VBoxArgs @(
     "guestcontrol", $VmName, "run",
     "--username", $GuestUsername, "--password", $GuestPassword,
     "--exe", "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
     "--", "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", $encoded
 )
-if ($LASTEXITCODE -ne 0) {
+if ($script:LastInvokeTimedOut) {
+    Write-Warning "zero-fill didn't finish within ${ZeroFillTimeoutSec}s -- guestcontrol on this VM has been observed to hang here intermittently even though the command itself is fine (confirmed by hand: the same call succeeds moments later). Continuing to shutdown/compact anyway, since whatever got written so far is still worth compacting, but this run may not have zeroed everything it could have -- re-run this script if the compaction result looks smaller than expected."
+} elseif ($LASTEXITCODE -ne 0) {
     Write-Warning "zero-fill exited $LASTEXITCODE (often just 'disk full' once it hits the target -- continuing)"
 }
 
 Write-Host "== shutting down $VmName =="  -ForegroundColor Cyan
-Invoke-VBoxQuiet @(
+Invoke-VBoxQuiet -TimeoutSec 60 -VBoxArgs @(
     "guestcontrol", $VmName, "run",
     "--username", $GuestUsername, "--password", $GuestPassword,
     "--exe", "C:\Windows\System32\cmd.exe",
     "--", "cmd.exe", "/c", "shutdown /s /t 0 /f"
 )
-if ($LASTEXITCODE -ne 0) { throw "triggering guest shutdown failed (exit $LASTEXITCODE)" }
+if ($LASTEXITCODE -ne 0) {
+    $timeoutNote = if ($script:LastInvokeTimedOut) { " (timed out rather than failing outright -- try again, or trigger the shutdown by hand)" } else { "" }
+    throw "triggering guest shutdown failed (exit $LASTEXITCODE)$timeoutNote"
+}
 
 $deadline = (Get-Date).AddSeconds($ShutdownTimeoutSec)
 $off = $false

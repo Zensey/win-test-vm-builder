@@ -1,0 +1,306 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Unattended install answer file for the drivertest test VM (Windows 7 x64
+  SP1). Produces a guest matching tests/vbox_autotest.py's prerequisites: a
+  local administrator with a non-empty password, UAC off, and WinRM reachable
+  so Packer can run the provisioning scripts.
+
+  Username/password here MUST match winrm_username/winrm_password in
+  packer/win7/win7-testvm.pkr.hcl.
+
+  Differences from the Win10 answer file (packer/http/Autounattend.xml) that
+  are NOT just cosmetic:
+  - System Reserved partition is 100 MB here (Win7's own default), not
+    350 MB (the Win8+ default the Win10 file uses).
+  - ProductKey is a Windows 7 generic KMS client setup key (different key
+    set than Win10's, and currently set for Enterprise) - it and
+    <ImageInstall><OSImage>/IMAGE/NAME must match the edition actually in
+    your ISO's install.wim, or Setup falls back to its normal interactive
+    language/edition screens (`dism /Get-WimInfo` on the ISO lists what's
+    there; see the comment by <ProductKey> below for other editions' keys).
+  - WinRM setup is split across two passes, unlike the Win10 file's single
+    FirstLogonCommands block: specialize sets AllowUnencrypted through a
+    Group Policy registry key (the one setting that's actually blocked by
+    VirtualBox's NAT adapter coming up "Public" - see that pass's
+    comment), and FirstLogonCommands then creates the actual HTTP
+    listener, enables Basic auth, and raises the WinRM shell quota -
+    commands that turned out to silently no-op from specialize's
+    SYSTEM/Session 0 context but work immediately once a user is actually
+    logged in (see that section's comment for how this was narrowed down).
+  - Assumes the ISO already includes SP1 (WinRM 2.0, .NET 4+ prerequisites
+    some drivers/tools expect). An RTM-only ISO may need Windows Update
+    before some of this works.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <SetupUILanguage>
+        <UILanguage>en-US</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Type>Primary</Type>
+              <Size>100</Size>
+            </CreatePartition>
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+              <Format>NTFS</Format>
+              <Label>System Reserved</Label>
+              <Active>true</Active>
+              <TypeID>0x27</TypeID>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
+              <Format>NTFS</Format>
+              <Label>Windows</Label>
+              <Letter>C</Letter>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+        <WillShowUI>OnError</WillShowUI>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key>
+              <Value>Windows 7 ENTERPRISE</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>2</PartitionID>
+          </InstallTo>
+          <WillShowUI>OnError</WillShowUI>
+        </OSImage>
+      </ImageInstall>
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <!-- Generic, non-activating KMS client setup key for Windows 7
+             Enterprise (public, documented by Microsoft for exactly this
+             purpose): the install.wim on a standard retail/consumer ISO
+             holds several editions, and Setup can't pick one unattended
+             without a key AND a matching /IMAGE/NAME above - a mismatch
+             between the two (e.g. this file still saying PROFESSIONAL
+             against an Enterprise ISO) makes Setup fall back to showing
+             its normal interactive language/edition screens instead of
+             silently applying this answer file. Other Win7 edition keys
+             (Microsoft publishes the full KMS client key list):
+               Professional: FJ82H-XT6CR-J8D7P-XQJJ2-GPDD4
+               Professional N: MRPKT-YTG23-K7D7T-X2JMM-QY7MG
+               Ultimate: 342DG-6YJR8-X92GV-V7DCV-P4K27
+             Check the actual name with:
+               dism /Get-WimInfo /WimFile:<mounted-iso>\sources\install.wim -->
+        <ProductKey>
+          <Key>33PXH-7Y6KF-2VJC9-XBBR8-HVTHH</Key>
+          <WillShowUI>Never</WillShowUI>
+        </ProductKey>
+      </UserData>
+    </component>
+  </settings>
+
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <ComputerName>testvm7</ComputerName>
+      <TimeZone>UTC</TimeZone>
+    </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <RunSynchronous>
+        <!-- Turn UAC off now so the Packer winrm/guest-control communicator gets an
+             elevated token for the local administrator right away. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f</Path>
+        </RunSynchronousCommand>
+        <!-- Bring up WinRM over HTTP entirely through its Group Policy
+             registry keys, not "winrm quickconfig"/Set-Item WSMan: those
+             both refuse to enable AllowUnencrypted while the network is
+             classified "Public", which is exactly how VirtualBox's NAT
+             adapter comes up - and on this Win7 build that classification
+             is already in place even this early in specialize, same as it
+             was for the Win10 build's enable-winrm.cmd (see its comment).
+             The Win10 build works around that by reclassifying the network
+             as Private in FirstLogonCommands before touching WinRM, using
+             Get-NetConnectionProfile (needs the NetTCPIP module, Win8+
+             only). Windows 7's replacement for that - the legacy
+             INetworkListManager COM API - turned out to race the "Set
+             Network Location" dialog Windows pops up for the same
+             unidentified network (it's an interactive, user-session-only
+             prompt; FirstLogonCommands can get stuck behind it), which
+             once blocked WinRM from ever coming up here. The Group Policy
+             keys below sidestep the whole problem: they're honored
+             regardless of network category - no reclassification race,
+             and the "Set Network Location" dialog can pop up or sit there
+             unanswered without affecting WinRM at all. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service" /v AllowAutoConfig /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service" /v IPv4Filter /t REG_SZ /d "*" /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service" /v AllowUnencryptedTraffic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service\Auth" /v Basic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Client" /v AllowUnencryptedTraffic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Client" /v TrustedHostsList /t REG_SZ /d "*" /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WinRM\Client\Auth" /v Basic /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <Path>netsh advfirewall firewall add rule name=WinRM-HTTP dir=in action=allow protocol=TCP localport=5985 profile=any</Path>
+        </RunSynchronousCommand>
+        <!-- "exit 0" at the end: a fresh install's winrm service is Manual
+             start, so it needs starting here - but RunSynchronousCommand
+             aborts the whole specialize pass on a non-zero exit code, and
+             "net start" on a service that happens to already be running
+             returns one too. The rest of the WinRM setup (creating the
+             actual listener, enabling Basic auth, raising the shell quota)
+             is in FirstLogonCommands below, not here - see its comment for
+             why. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>10</Order>
+          <Path>cmd /c "sc config winrm start= auto &amp; net start winrm &amp; exit 0"</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value>DriverTestTest!1</Value>
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>tester</Name>
+            <Group>Administrators</Group>
+            <Password>
+              <Value>DriverTestTest!1</Value>
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <Username>tester</Username>
+        <Password>
+          <Value>DriverTestTest!1</Value>
+          <PlainText>true</PlainText>
+        </Password>
+        <LogonCount>999</LogonCount>
+      </AutoLogon>
+      <OOBE>
+        <!-- Deliberately the minimal, long-established Windows 7 OOBE set,
+             not the fuller Win8/10 list (../../http/Autounattend.xml):
+             HideOnlineAccountScreens (Microsoft-account sign-in page) and,
+             it turns out, also HideOEMRegistrationScreen/
+             HideWirelessSetupInOOBE are not in Windows 7's Shell-Setup
+             catalog - including any of them made Setup fail outright with
+             "Windows could not parse unattend answer file ... for pass
+             [oobeSystem]. A component or setting specified in the answer
+             file does not exist." (the message never names which setting,
+             so this took a few rounds of removing one at a time to find).
+             SkipMachineOOBE/SkipUserOOBE already skip the whole OOBE
+             wizard on Win7 - the Hide* flags are the more granular Win8+
+             replacement for them, not something Win7 needs on top. -->
+        <HideEULAPage>true</HideEULAPage>
+        <NetworkLocation>Work</NetworkLocation>
+        <ProtectYourPC>1</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+      <FirstLogonCommands>
+        <!-- Finishes the WinRM setup that specialize's GPO registry keys
+             (AllowUnencrypted via policy - the one setting that's actually
+             guarded by network category) couldn't do on their own. Two
+             things were tried here before landing on this:
+             1. Doing all of this in specialize too, right after "net start
+                winrm" (`winrm create` for the listener, raising
+                MaxShellsPerUser): looked right since network category
+                doesn't guard any of these, but confirmed live that it
+                silently does nothing from specialize - the service comes
+                up RUNNING with no listener and the default
+                MaxShellsPerUser=5 regardless of these commands being
+                present and exiting 0. `winrm.cmd` apparently needs a real
+                logged-on user context to actually perform these, not
+                specialize's SYSTEM/Session 0 one, even though plain `reg
+                add` commands work fine there.
+             2. The ORIGINAL post-logon attempt (this file's first cut) put
+                the NAT-adapter-to-Private-network COM script first in this
+                same list, which is what actually appears to have gotten
+                stuck - some run of it never returned, which blocks every
+                command after it since SynchronousCommand entries run in
+                order and stop on the first one that doesn't finish. That
+                script is gone entirely now: GPO already made
+                AllowUnencrypted true regardless of network category, so
+                there's nothing left here that needs the reclassification
+                it existed for.
+             Confirmed live, in a real logged-on session, that each
+             command below works instantly with no error and no "Public
+             network" complaint - unlike specialize, and unlike trying to
+             set AllowUnencrypted this way (which is still blocked here
+             too, which is exactly why that one stays a GPO key instead). -->
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>cmd /c "winrm create winrm/config/Listener?Address=*+Transport=HTTP &amp; exit 0"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>cmd /c winrm set winrm/config/service/auth @{Basic="true"}</CommandLine>
+        </SynchronousCommand>
+        <!-- Default MaxShellsPerUser is 5. Packer's WinRM waiter opens a
+             new shell on every health-check poll; if several polls land
+             before this listener exists, the failed/abandoned shells
+             count against this quota and it's easy to exhaust it before
+             the connection ever succeeds (confirmed live: once that
+             happened, every later attempt - Packer's and a plain WS-Man
+             Create request alike - failed with "QuotaLimit: the maximum
+             number of concurrent shells ... has been exceeded", which
+             looks identical to "not ready yet" from Packer's side, so it
+             just keeps waiting forever). -->
+        <SynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <CommandLine>cmd /c winrm set winrm/config/winrs @{MaxShellsPerUser="50"}</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>

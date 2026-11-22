@@ -1,14 +1,20 @@
 # Driver Test/Debug VM image builder
 
 Builds the Windows 10 x64 VirtualBox VM for automated test/debug of drivers,
-so the setup (`vm_guest_setup_bcd.bat`) doesn't need to be done by hand:
+so the setup (`vm_guest_setup_bcd.bat`) doesn't need to be done by hand.
+This file covers the Win10 build (`build-win10.ps1`); for Win7, see
+[`win7/README.md`](win7/README.md) and `build-win7.ps1` -- same idea, kept
+as its own Packer config under `win7/` since the two templates can't share
+a directory (see `win7/win7-testvm.pkr.hcl`'s header comment for why).
+
+The Win10 build bakes in:
 
 - `bcdedit /set TESTSIGNING ON`
 - `bcdedit /debug on` and `bcdedit /dbgsettings serial debugport:1 baudrate:115200`
 - the `Debug Print Filter` registry value (`DEFAULT=0xf`) the test's
   `--verifier` flow relies on to see `DbgPrint` output once a debugger is
   attached
-- UAC off and a local administrator account (`tester` / `win10-testvm.pkr.hcl`'s
+- UAC off and a local administrator account (`tester` / `win10/win10-testvm.pkr.hcl`'s
   `winrm_password` for `vbox_autotest.py`)
 - VirtualBox Guest Additions
 - a serial port wired to a named pipe (`\\.\pipe\<vm_name>-com1`), the one
@@ -17,7 +23,7 @@ so the setup (`vm_guest_setup_bcd.bat`) doesn't need to be done by hand:
 ## Prerequisites
 
 - VirtualBox
-- A Windows 10 x64 install ISO
+- A Windows 10 x64 install ISO (Win7 x64 SP1 for `build-win7.ps1` instead)
 
 ## Build
 
@@ -25,10 +31,11 @@ One command, start to finish (build + compact):
 
 ```
 cd packer
-.\build.ps1 -IsoUrl C:\Distr\Windows-10-pro-en.iso -VmName w10-pro
+.\build-win10.ps1 -IsoUrl C:\Distr\Windows-10-pro-en.iso -VmName w10-pro
+.\build-win7.ps1 -IsoUrl C:\Distr\Windows-7-pro-en.iso -VmName w7-pro
 ```
 
-`build.ps1` runs `packer init`, then `packer build -on-error=abort` (see why
+`build-win10.ps1` runs `packer init`, then `packer build -on-error=abort` (see why
 below), and — only once that build has actually exited 0 — compacts the
 resulting VDI itself and prints before/after size. A build failure leaves
 the VM and disk in place and the script exits non-zero without touching
@@ -42,10 +49,15 @@ re-hashing a large ISO you've already checksummed.
 To run the steps separately instead:
 
 ```
+cd packer/win10
 packer init .
 packer build -on-error=abort -var vm_name=w10-pro -var iso_url=<path-or-url-to-win10-x64.iso> -var iso_checksum=sha256:<hex> .
-VBoxManage modifymedium --compact output-w10-pro\w10-pro.vdi
+VBoxManage modifymedium --compact ..\output-w10-pro\w10-pro.vdi
 ```
+
+`output_directory` in `win10/win10-testvm.pkr.hcl` points one level up
+(`../output-<name>`, not `output-<name>` here), so build output lands at
+the top of `packer/`, not nested under `win10/`.
 
 `-on-error=abort` matters: Packer's default on-error behavior deletes the
 builder's output directory (the VM's disk) on ANY failure, including one in
@@ -78,13 +90,13 @@ should work directly against the built VM.
   would roughly double the disk used.
 - The disk is a dynamic VDI (default 40 GB cap, `-var disk_size=...` to
   change) — it only grows as Windows actually writes to it.
-- `scripts/shrink.ps1` runs last: drops provisioned consumer apps, turns
+- `win10/scripts/shrink.ps1` runs last: drops provisioned consumer apps, turns
   hibernation off, runs a component-store cleanup, and zeroes freed disk
   space by writing real zero bytes to a temp file (not `cipher /w`: its last
   pass writes random data, which leaves free space non-zero and defeats
   compaction — measured 38.7 GB still used out of 40 GB with `cipher /w`,
   vs 12.3 GB with an actual zero-fill).
-- Compaction happens in `build.ps1`, after `packer build` itself, not as a
+- Compaction happens in `build-win10.ps1`, after `packer build` itself, not as a
   Packer post-processor (see the `-on-error=abort` note above for why) — or
   run `VBoxManage modifymedium --compact output-<vm_name>\<vm_name>.vdi` by
   hand if you used the separate-steps form.
@@ -96,7 +108,7 @@ should work directly against the built VM.
 Everything baked into the image, file by file -- useful as a single place to
 check what's actually in there without reading all four files.
 
-### VM hardware (`win10-testvm.pkr.hcl`, `vboxmanage`/builder settings)
+### VM hardware (`win10/win10-testvm.pkr.hcl`, `vboxmanage`/builder settings)
 
 - CPUs: 2 (`-var cpus=...`)
 - Memory: 2048 MB (`-var memory=...`)
@@ -118,9 +130,9 @@ check what's actually in there without reading all four files.
   would roughly double the disk used
 - Guest Additions ISO attached (`guest_additions_mode = "attach"`)
 - WinRM communicator: username `tester`, password from `winrm_password`
-  (must match `http/Autounattend.xml`'s local account)
+  (must match `win10/http/Autounattend.xml`'s local account)
 
-### Windows unattended install (`http/Autounattend.xml`)
+### Windows unattended install (`win10/http/Autounattend.xml`)
 
 - Language/locale: `en-US`
 - Disk layout: 350 MB "System Reserved" + the rest as `C:`, both NTFS
@@ -132,7 +144,7 @@ check what's actually in there without reading all four files.
 - UAC disabled via registry during the specialize pass, before WinRM ever
   needs to log in, so it gets an elevated token for `tester` right away
 - Local administrator account `tester` (password baked in -- must match
-  `win10-testvm.pkr.hcl`'s `winrm_password`), with `AutoLogon` enabled
+  `win10/win10-testvm.pkr.hcl`'s `winrm_password`), with `AutoLogon` enabled
 - OOBE screens skipped (EULA, OEM registration, online account, wireless
   setup); network location set to "Work"
 - `FirstLogonCommands` bring WinRM up over HTTP: reclassify the network as
@@ -141,7 +153,7 @@ check what's actually in there without reading all four files.
   firewall for port 5985, enable `AllowUnencrypted` + Basic auth (both
   service and client), then restart the WinRM service
 
-### Baked-in system config (`scripts/provision.ps1`)
+### Baked-in system config (`win10/scripts/provision.ps1`)
 
 - `bcdedit /set TESTSIGNING ON`
 - `bcdedit /set nointegritychecks OFF`
@@ -164,7 +176,7 @@ check what's actually in there without reading all four files.
   widgets/Clipchamp/etc. provisioned packages (before they can be touched
   by Windows Update or the Store for the rest of the build)
 
-### Final cleanup (`scripts/shrink.ps1`)
+### Final cleanup (`win10/scripts/shrink.ps1`)
 
 - Removes every remaining provisioned Appx package -- a blanket sweep that
   catches anything the named list in `provision.ps1` missed
@@ -177,9 +189,9 @@ check what's actually in there without reading all four files.
   last pass writes random data and defeats compaction -- see "Keeping it
   small" below)
 
-### Orchestration (`build.ps1`, `compact-vm.ps1`)
+### Orchestration (`build-win10.ps1`, `compact-vm.ps1`)
 
-- `build.ps1` self-installs `packer.exe` (checksum-verified against
+- `build-win10.ps1` self-installs `packer.exe` (checksum-verified against
   HashiCorp's published SHA256SUMS) if it isn't already next to it or on
   PATH, auto-hashes a local `-IsoUrl`, always runs `packer build
   -on-error=abort`, and only compacts the VDI after a confirmed-successful
@@ -210,4 +222,4 @@ down, waits for `poweroff`, and only then compacts the VDI -- it refuses to
 compact a VM that didn't actually reach `poweroff`, since compacting a disk
 still attached to a running VM corrupts it. Needs Guest Additions and a
 guest account `guestcontrol` can log into; `-GuestUsername`/`-GuestPassword`
-default to `http/Autounattend.xml`'s local account.
+default to `win10/http/Autounattend.xml`'s local account.

@@ -39,7 +39,7 @@
   validated against.
 
 .EXAMPLE
-  .\build.ps1 -IsoUrl C:\Distr\Windows-10-pro-en.iso -VmName w10-pro
+  .\build-win10.ps1 -IsoUrl C:\Distr\Windows-10-pro-en.iso -VmName w10-pro
 #>
 param(
     [Parameter(Mandatory = $true)][string]$IsoUrl,
@@ -52,7 +52,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
+# The Packer CONFIG root (win10-testvm.pkr.hcl and everything relative to
+# it, like output_directory) -- NOT this script's own location.
+$root = Join-Path $PSScriptRoot "win10"
 
 if (-not $IsoChecksum) {
     if ($IsoUrl -match "^[a-zA-Z][a-zA-Z0-9+.-]*://" -and $IsoUrl -notmatch "^file://") {
@@ -111,13 +113,15 @@ function Install-Packer {
 }
 
 $vboxManage = Find-VBoxManage
-$packerExe = Join-Path $root "packer.exe"
+# Shared packer.exe next to this script (and build-win7.ps1) -- not a
+# separate copy under win10/, since it's the same binary either way.
+$packerExe = Join-Path $PSScriptRoot "packer.exe"
 if (-not (Test-Path $packerExe)) {
     $onPath = Get-Command packer.exe -ErrorAction SilentlyContinue
     if ($onPath) {
         $packerExe = $onPath.Source
     } else {
-        Install-Packer -Version $PackerVersion -DestDir $root
+        Install-Packer -Version $PackerVersion -DestDir $PSScriptRoot
     }
 }
 
@@ -142,7 +146,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "packer build failed (exit $LASTEXITCODE); VM/disk left in place for inspection -- see README.md"
 }
 
-$vdi = Join-Path $root "output-$VmName\$VmName.vdi"
+$vdi = Join-Path $PSScriptRoot "output-$VmName\$VmName.vdi"
 if (-not (Test-Path $vdi)) {
     Write-Warning "build succeeded but $vdi was not found; compact it by hand once you locate it"
     exit 0
@@ -150,7 +154,15 @@ if (-not (Test-Path $vdi)) {
 
 $before = (Get-Item $vdi).Length
 Write-Host ("== compacting {0} ({1:N1} GB before) ==" -f $vdi, ($before / 1GB)) -ForegroundColor Cyan
-& $vboxManage modifymedium --compact $vdi
+# $ErrorActionPreference = "Stop" (above) turns VBoxManage's own progress
+# output ("0%...10%...") into a terminating NativeCommandError if any of it
+# lands on stderr, even when VBoxManage itself exits 0 -- swallow stderr
+# and check the real exit code ourselves instead of letting PowerShell's
+# error promotion decide (same fix as build-win7.ps1/compact-vm.ps1).
+try {
+    & $vboxManage modifymedium --compact $vdi 2>$null
+} catch {
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "compaction failed (exit $LASTEXITCODE); the VM is still usable, just larger on disk than it needs to be"
     exit 0

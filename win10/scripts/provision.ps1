@@ -2,7 +2,7 @@
 # already have set up by hand (see vm_guest_setup_bcd.bat and the README at the
 # top of vbox_autotest.py): test signing, kernel debug/bcdedit settings, the
 # Driver Verifier debug-print registry value, and VirtualBox Guest Additions.
-# Run by packer/win10-testvm.pkr.hcl via the "powershell" provisioner.
+# Run by packer/win10/win10-testvm.pkr.hcl via the "powershell" provisioner.
 
 $ErrorActionPreference = "Stop"
 
